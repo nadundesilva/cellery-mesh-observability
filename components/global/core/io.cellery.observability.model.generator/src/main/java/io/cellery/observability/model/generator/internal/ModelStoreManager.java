@@ -139,6 +139,7 @@ public class ModelStoreManager {
      * @throws GraphStoreException If loading the model failed
      */
     public List<Model> loadModels(long startTime, long endTime, String runtime) throws GraphStoreException {
+        List<Model> models = new ArrayList<>();
         try {
             Connection connection = getConnection();
             PreparedStatement statement = connection.prepareStatement(
@@ -150,7 +151,6 @@ public class ModelStoreManager {
             statement.setString(3, runtime);
             ResultSet resultSet = statement.executeQuery();
 
-            List<Model> models = new ArrayList<>();
             while (resultSet.next()) {
                 String nodes = resultSet.getString(1);
                 String edges = resultSet.getString(2);
@@ -160,7 +160,50 @@ public class ModelStoreManager {
                 models.add(new Model(nodesSet, edgeSet));
             }
             cleanupConnection(resultSet, statement, connection);
-            return models;
+        } catch (SQLException ex) {
+            throw new GraphStoreException("Unable to load the graph from datasource : " + DATASOURCE_NAME, ex);
+        }
+        if (models.size() == 0) {
+            /*
+             * Loading the last known model before the startTime
+             * This is done as the model entries does not exist if the model had not evolved within the time period
+             */
+            Model model = this.loadLastModel(startTime, runtime);
+            if (model != null) {
+                models.add(model);
+            }
+        }
+        return models;
+    }
+
+    /**
+     * Load the last known timestamp before a certain cutoff timestamp.
+     *
+     * @param cutOffTimestamp The cut off timestamp, before which the models stored should be considered
+     * @param runtime The runtime of which the model should be fetched
+     * @return The last model before the cut off timestamp
+     */
+    private Model loadLastModel(long cutOffTimestamp, String runtime) throws GraphStoreException {
+        try {
+            Connection connection = getConnection();
+            PreparedStatement statement = connection.prepareStatement(
+                    "SELECT NODES, EDGES FROM " + TABLE_NAME +
+                            " WHERE MODEL_TIMESTAMP < ? AND RUNTIME = ?" +
+                            " ORDER BY MODEL_TIMESTAMP DESC LIMIT 1");
+            statement.setTimestamp(1, new Timestamp(cutOffTimestamp));
+            statement.setString(2, runtime);
+            ResultSet resultSet = statement.executeQuery();
+
+            Model model = null;
+            if (resultSet.next()) {
+                String nodes = resultSet.getString(1);
+                String edges = resultSet.getString(2);
+                Set<Node> nodesSet = gson.fromJson(nodes, NODE_SET_TYPE);
+                Set<Edge> edgeSet = gson.fromJson(edges, STRING_SET_TYPE);
+                model = new Model(nodesSet, edgeSet);
+            }
+            cleanupConnection(resultSet, statement, connection);
+            return model;
         } catch (SQLException ex) {
             throw new GraphStoreException("Unable to load the graph from datasource : " + DATASOURCE_NAME, ex);
         }
